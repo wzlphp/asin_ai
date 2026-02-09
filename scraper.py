@@ -16,10 +16,33 @@ logger = logging.getLogger(__name__)
 _WORKER = str(Path(__file__).parent / "scrape_worker.py")
 _PYTHON = sys.executable
 
+# 确保 Playwright 浏览器已安装（Streamlit Cloud 等环境首次运行时需要）
+_BROWSER_INSTALLED = False
+
+
+def _ensure_browser():
+    global _BROWSER_INSTALLED
+    if _BROWSER_INSTALLED:
+        return
+    try:
+        result = subprocess.run(
+            [_PYTHON, "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode == 0:
+            logger.info("Playwright chromium 安装成功")
+        else:
+            logger.warning(f"Playwright install 输出: {result.stderr[:300]}")
+    except Exception as e:
+        logger.warning(f"Playwright install 跳过: {e}")
+    _BROWSER_INSTALLED = True
+
 
 def _run_worker(command: str, arg: str, domain: str = "us",
                 extra_args: list | None = None, timeout: int = 45) -> dict | list | None:
     """调用 scrape_worker.py 子进程，返回解析后的 JSON"""
+    _ensure_browser()
+
     cmd = [_PYTHON, _WORKER, command, arg, domain]
     if extra_args:
         cmd.extend(extra_args)
