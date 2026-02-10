@@ -94,3 +94,14 @@ def fetch_search(keyword: str, domain: str = "us", page: int = 1) -> list[dict]:
     if isinstance(result, list):
         return result
     return []
+
+
+def fetch_screenshot(asin: str, domain: str = "us", language: str | None = None) -> str | None:
+    """截取产品页面截图，返回 base64 编码的 PNG 字符串"""
+    extra = [language] if language else None
+    result = _run_worker("screenshot", asin, domain, extra_args=extra, timeout=30)
+    if isinstance(result, dict) and "screenshot" in result:
+        return result["screenshot"]
+    if isinstance(result, dict):
+        logger.warning(f"截图失败: {result.get('message', result.get('error'))}")
+    return None

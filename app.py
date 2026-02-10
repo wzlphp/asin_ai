@@ -9,6 +9,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import base64
 from data_service import (
     search_product,
     find_competitors,
@@ -16,6 +17,7 @@ from data_service import (
     get_keyword_rankings,
     extract_keywords_from_title,
 )
+from scraper import fetch_screenshot
 
 # ============================================================
 # 页面配置
@@ -35,11 +37,20 @@ st.caption("输入 ASIN → 爬取 Amazon 真实数据 → 四大维度深度分
 # ============================================================
 st.sidebar.header("🔍 产品搜索")
 
+DOMAIN_LABELS = {
+    "us": "🇺🇸 Amazon.com", "uk": "🇬🇧 Amazon.co.uk",
+    "de": "🇩🇪 Amazon.de", "jp": "🇯🇵 Amazon.co.jp",
+    "fr": "🇫🇷 Amazon.fr", "it": "🇮🇹 Amazon.it",
+    "es": "🇪🇸 Amazon.es", "ca": "🇨🇦 Amazon.ca",
+    "au": "🇦🇺 Amazon.com.au", "in": "🇮🇳 Amazon.in",
+    "sg": "🇸🇬 Amazon.sg", "mx": "🇲🇽 Amazon.com.mx",
+    "br": "🇧🇷 Amazon.com.br", "ae": "🇦🇪 Amazon.ae",
+}
+
 domain = st.sidebar.selectbox(
     "Amazon 站点",
-    options=["us", "uk", "de", "jp"],
-    format_func=lambda x: {"us": "🇺🇸 Amazon.com", "uk": "🇬🇧 Amazon.co.uk",
-                           "de": "🇩🇪 Amazon.de", "jp": "🇯🇵 Amazon.co.jp"}[x],
+    options=list(DOMAIN_LABELS.keys()),
+    format_func=lambda x: DOMAIN_LABELS[x],
 )
 
 asin_input = st.sidebar.text_input(
@@ -236,6 +247,57 @@ if not competitors:
     st.warning("未找到竞品数据，可能是反爬限制或产品页结构特殊。以下仅展示目标产品分析。")
 
 # ============================================================
+# 页面预览
+# ============================================================
+LANGUAGE_OPTIONS = {
+    "en_US": "English",
+    "zh_CN": "中文",
+    "ja_JP": "日本語",
+    "de_DE": "Deutsch",
+    "fr_FR": "Français",
+    "es_ES": "Español",
+    "it_IT": "Italiano",
+    "pt_BR": "Português",
+    "hi_IN": "हिन्दी",
+    "ar_AE": "العربية",
+}
+
+with st.expander("🖥️ 页面预览", expanded=False):
+    prev_col1, prev_col2 = st.columns([1, 3])
+
+    with prev_col1:
+        preview_domain = st.selectbox(
+            "预览站点",
+            options=list(DOMAIN_LABELS.keys()),
+            index=list(DOMAIN_LABELS.keys()).index(active_domain),
+            format_func=lambda x: DOMAIN_LABELS[x],
+            key="preview_domain",
+        )
+        preview_lang = st.selectbox(
+            "语言",
+            options=list(LANGUAGE_OPTIONS.keys()),
+            format_func=lambda x: LANGUAGE_OPTIONS[x],
+            key="preview_lang",
+        )
+        take_screenshot = st.button("📸 获取截图", use_container_width=True)
+
+    with prev_col2:
+        cache_key = f"screenshot_{active_asin}_{preview_domain}_{preview_lang}"
+        if take_screenshot:
+            with st.spinner("正在截取页面..."):
+                img_b64 = fetch_screenshot(active_asin, preview_domain, preview_lang)
+                if img_b64:
+                    st.session_state[cache_key] = img_b64
+                else:
+                    st.error("截图失败，请稍后重试。")
+
+        if cache_key in st.session_state:
+            img_bytes = base64.b64decode(st.session_state[cache_key])
+            st.image(img_bytes, caption=f"{DOMAIN_LABELS[preview_domain]} - {LANGUAGE_OPTIONS[preview_lang]}", width="stretch")
+        else:
+            st.info("点击「获取截图」预览 Amazon 产品页面。")
+
+# ============================================================
 # Tab 布局
 # ============================================================
 tabs = st.tabs([
@@ -279,7 +341,7 @@ with tabs[0]:
             "变体数": p.get("variant_count", 0),
             "变体维度": p.get("variant_dimension", ""),
         })
-    st.dataframe(pd.DataFrame(basic_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(basic_rows), width="stretch", hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -321,7 +383,7 @@ with tabs[0]:
 
         bullet_df = pd.DataFrame(bullet_table).T
         bullet_df.index.name = "产品"
-        st.dataframe(bullet_df, use_container_width=True)
+        st.dataframe(bullet_df, width="stretch")
 
         # 展开查看完整内容
         with st.expander("📋 查看完整 Bullet Points 原文"):
@@ -352,7 +414,7 @@ with tabs[1]:
             fig.update_yaxes(autorange="reversed")
             st.plotly_chart(fig, use_container_width=True)
 
-        st.dataframe(kw_df, use_container_width=True, hide_index=True)
+        st.dataframe(kw_df, width="stretch", hide_index=True)
     else:
         if do_keywords:
             st.info("关键词排名数据暂未获取到。")
@@ -370,7 +432,7 @@ with tabs[1]:
             "优惠券": p.get("coupon", "无"),
             "发货方式": p.get("fulfillment", "未知"),
         })
-    st.dataframe(pd.DataFrame(ad_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(ad_rows), width="stretch", hide_index=True)
 
     st.divider()
 
@@ -388,7 +450,7 @@ with tabs[1]:
                 "评价数": p.get("review_count", 0),
             })
         review_df = pd.DataFrame(review_rows)
-        st.dataframe(review_df, use_container_width=True, hide_index=True)
+        st.dataframe(review_df, width="stretch", hide_index=True)
 
         valid_review = review_df[review_df["星级"].notna() & (review_df["评价数"] > 0)]
         if not valid_review.empty:
@@ -444,7 +506,7 @@ with tabs[2]:
             "变体数": p.get("variant_count", 0),
             "优惠券": p.get("coupon", "无"),
         })
-    st.dataframe(pd.DataFrame(ops_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(ops_rows), width="stretch", hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -549,12 +611,12 @@ with tabs[4]:
             "价格($)": price,
             "星级": rating,
             "评价数": review_count,
-            "BSR": bsr if bsr < 999 else "N/A",
+            "BSR": f"#{bsr:,}" if bsr < 999 else "N/A",
             "综合得分": score,
         })
 
     summary_df = pd.DataFrame(summary_rows).sort_values("综合得分", ascending=False)
-    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    st.dataframe(summary_df, width="stretch", hide_index=True)
 
     # 差异化机会
     st.markdown("#### 🎯 差异化机会发现")
