@@ -2,7 +2,7 @@
 亚马逊竞品分析工具
 Amazon Competitive Analysis Tool
 
-流程：输入 ASIN → 爬取真实数据 → 自动查找竞品 → 四大维度分析
+流程：输入 ASIN → 调用 API 获取数据 → 自动查找竞品 → 四大维度分析
 """
 
 import streamlit as st
@@ -30,7 +30,7 @@ st.set_page_config(
 )
 
 st.title("📊 亚马逊竞品分析工具")
-st.caption("输入 ASIN → 爬取 Amazon 真实数据 → 四大维度深度分析")
+st.caption("输入 ASIN → 调用 API 获取 Amazon 数据 → 四大维度深度分析")
 
 # ============================================================
 # 侧边栏 - ASIN 输入
@@ -60,7 +60,7 @@ asin_input = st.sidebar.text_input(
     help="输入亚马逊产品的 ASIN 编码（10位字母数字），可在产品页URL中找到",
 )
 
-competitor_count = st.sidebar.slider("查找竞品数量", min_value=2, max_value=8, value=4)
+competitor_count = st.sidebar.slider("查找竞品数量", min_value=2, max_value=8, value=5)
 
 analyze_keywords = st.sidebar.checkbox("分析关键词排名", value=False,
                                        help="开启后会搜索关键词排名，耗时较长")
@@ -90,7 +90,7 @@ if not active_asin:
     ### 使用方法
     1. 选择 Amazon 站点（默认美国站）
     2. 在左侧输入目标产品的 **ASIN**
-    3. 点击 **开始分析**，系统将实时爬取数据
+    3. 点击 **开始分析**，系统将通过 API 获取数据
 
     ### 分析维度
     | 维度 | 关注点 |
@@ -115,11 +115,11 @@ do_keywords = st.session_state.get("do_keywords", False)
 
 # 抓取目标产品
 if "product" not in st.session_state:
-    with st.spinner(f"正在抓取产品 {active_asin} ..."):
+    with st.spinner(f"正在获取产品 {active_asin} ..."):
         product = search_product(active_asin, active_domain)
         if not product or not product.get("title"):
             st.error(f"无法获取 ASIN: {active_asin} 的产品信息。可能原因：\n"
-                     f"- ASIN 不正确\n- 产品页被反爬拦截\n- 产品已下架\n\n"
+                     f"- ASIN 不正确\n- API 服务不可用\n- 产品已下架\n\n"
                      f"请检查后重试。")
             st.session_state.pop("active_asin", None)
             st.stop()
@@ -137,6 +137,7 @@ if "competitors" not in st.session_state:
     competitors = find_competitors(
         active_asin, active_domain, count=comp_count,
         progress_callback=update_progress,
+        target_product=product,
     )
     progress_bar.progress(1.0, text=f"找到 {len(competitors)} 个竞品")
     st.session_state["competitors"] = competitors
@@ -179,7 +180,7 @@ if st.sidebar.button("➕ 添加竞品", use_container_width=True):
     elif any(c["asin"] == new_asin_clean for c in competitors):
         st.sidebar.warning(f"{new_asin_clean} 已在竞品列表中")
     else:
-        with st.sidebar.status(f"正在抓取 {new_asin_clean} ...", expanded=True) as status:
+        with st.sidebar.status(f"正在获取 {new_asin_clean} ...", expanded=True) as status:
             comp = search_product(new_asin_clean, active_domain)
             if comp and comp.get("title"):
                 comp["tier"] = "手动添加"
@@ -193,7 +194,7 @@ if st.sidebar.button("➕ 添加竞品", use_container_width=True):
             else:
                 status.update(label=f"无法获取 {new_asin_clean}", state="error")
 
-# 评价分析（评价数据已在产品页抓取时获取，无需额外请求）
+# 评价分析
 if "reviews" not in st.session_state:
     st.session_state["reviews"] = get_review_analysis(product)
 
@@ -219,32 +220,52 @@ kw_data = st.session_state.get("kw_data", [])
 # 所有产品列表（本品 + 竞品）
 all_products = [{"name": f"★ 本品 ({product['asin']})", **product}] + competitors
 
+# 货币符号
+currency = product.get("currency", "USD")
+CURRENCY_SYMBOLS = {
+    "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥",
+    "CAD": "CA$", "AUD": "A$", "INR": "₹", "SGD": "S$",
+    "MXN": "MX$", "BRL": "R$", "AED": "AED",
+}
+currency_symbol = CURRENCY_SYMBOLS.get(currency, currency + " ")
+
 # ============================================================
 # 产品概览卡片
 # ============================================================
 st.markdown("---")
 st.subheader(f"🎯 {product['title']}")
 
-metric_cols = st.columns(6)
+metric_cols = st.columns(7)
 metric_cols[0].metric("ASIN", product["asin"])
-metric_cols[1].metric("售价", f"${product['price_daily']}" if product.get("price_daily") else "N/A")
-metric_cols[2].metric("星级", f"⭐ {product['rating']}" if product.get("rating") else "N/A")
-metric_cols[3].metric("评价数", f"{product['review_count']:,}" if product.get("review_count") else "0")
-metric_cols[4].metric("BSR", f"#{product['bsr']:,}" if product.get("bsr") else "N/A")
-metric_cols[5].metric("变体数", product.get("variant_count", 0))
+metric_cols[1].metric("售价", f"{currency_symbol}{product['price_daily']}" if product.get("price_daily") else "N/A")
+metric_cols[2].metric("货币", currency)
+metric_cols[3].metric("星级", f"⭐ {product['rating']}" if product.get("rating") else "N/A")
+metric_cols[4].metric("评价数", f"{product['review_count']:,}" if product.get("review_count") else "0")
+metric_cols[5].metric("BSR", f"#{product['bsr']:,}" if product.get("bsr") else "N/A")
+metric_cols[6].metric("变体数", product.get("variant_count", 0))
 
+# 标签和信息行
 info_parts = []
 if product.get("category_node"):
     info_parts.append(f"**类目：** {product['category_node']}")
-if product.get("fulfillment"):
-    info_parts.append(f"**发货：** {product['fulfillment']}")
-if product.get("coupon") and product["coupon"] != "无":
-    info_parts.append(f"**优惠券：** {product['coupon']}")
+if product.get("stock_status") and product["stock_status"] != "未知":
+    info_parts.append(f"**库存：** {product['stock_status']}")
+if product.get("best_seller_badge"):
+    info_parts.append("**🏆 Best Seller**")
+if product.get("amazon_choice_badge"):
+    info_parts.append("**⭐ Amazon's Choice**")
+if product.get("url"):
+    info_parts.append(f"**链接：** [{product['url']}]({product['url']})")
 if info_parts:
     st.info("　｜　".join(info_parts))
 
+# BSR 详情
+if product.get("bsr_details"):
+    bsr_parts = [f"**#{d['rank']:,}** in {d['category']}" for d in product["bsr_details"]]
+    st.caption("BSR 详情：" + "　|　".join(bsr_parts))
+
 if not competitors:
-    st.warning("未找到竞品数据，可能是反爬限制或产品页结构特殊。以下仅展示目标产品分析。")
+    st.warning("未找到竞品数据。以下仅展示目标产品分析。")
 
 # ============================================================
 # 页面预览
@@ -293,7 +314,7 @@ with st.expander("🖥️ 页面预览", expanded=False):
 
         if cache_key in st.session_state:
             img_bytes = base64.b64decode(st.session_state[cache_key])
-            st.image(img_bytes, caption=f"{DOMAIN_LABELS[preview_domain]} - {LANGUAGE_OPTIONS[preview_lang]}", width="stretch")
+            st.image(img_bytes, caption=f"{DOMAIN_LABELS[preview_domain]} - {LANGUAGE_OPTIONS[preview_lang]}", use_container_width=True)
         else:
             st.info("点击「获取截图」预览 Amazon 产品页面。")
 
@@ -330,18 +351,25 @@ with tabs[0]:
 
     basic_rows = []
     for p in all_products:
-        basic_rows.append({
+        row = {
             "产品": p.get("name", p.get("title", p["asin"])),
             "层级": p.get("tier", "本品"),
             "ASIN": p["asin"],
             "品牌": p.get("brand", ""),
             "类目": p.get("category_node", ""),
-            "售价($)": p.get("price_daily"),
-            "促销价($)": p.get("price_promo"),
+            f"售价({currency})": p.get("price_daily"),
             "变体数": p.get("variant_count", 0),
             "变体维度": p.get("variant_dimension", ""),
-        })
-    st.dataframe(pd.DataFrame(basic_rows), width="stretch", hide_index=True)
+        }
+        # 显示徽章
+        badges = []
+        if p.get("best_seller_badge"):
+            badges.append("🏆BS")
+        if p.get("amazon_choice_badge"):
+            badges.append("⭐AC")
+        row["徽章"] = " ".join(badges)
+        basic_rows.append(row)
+    st.dataframe(pd.DataFrame(basic_rows), use_container_width=True, hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -351,11 +379,9 @@ with tabs[0]:
             name = p.get("name", p["asin"])
             if p.get("price_daily"):
                 price_rows.append({"产品": name, "类型": "当前售价", "价格": p["price_daily"]})
-            if p.get("price_promo") and p["price_promo"] != p.get("price_daily"):
-                price_rows.append({"产品": name, "类型": "促销价", "价格": p["price_promo"]})
         if price_rows:
             fig = px.bar(pd.DataFrame(price_rows), x="产品", y="价格", color="类型",
-                         barmode="group", title="售价 vs 促销价")
+                         barmode="group", title=f"售价对比 ({currency})")
             st.plotly_chart(fig, use_container_width=True)
 
     with col2:
@@ -372,7 +398,6 @@ with tabs[0]:
     # 五点描述对比
     st.markdown("#### 五点描述（Bullet Points）对比")
 
-    # 并排表格：每行一个卖点序号，每列一个产品
     max_bullets = max((len(p.get("bullet_points", [])) for p in all_products), default=0)
     if max_bullets > 0:
         bullet_table = {}
@@ -383,9 +408,8 @@ with tabs[0]:
 
         bullet_df = pd.DataFrame(bullet_table).T
         bullet_df.index.name = "产品"
-        st.dataframe(bullet_df, width="stretch")
+        st.dataframe(bullet_df, use_container_width=True)
 
-        # 展开查看完整内容
         with st.expander("📋 查看完整 Bullet Points 原文"):
             for p in all_products:
                 name = p.get("name", p["asin"])
@@ -395,6 +419,17 @@ with tabs[0]:
                     for i, b in enumerate(bullets, 1):
                         st.markdown(f"{i}. {b}")
                     st.markdown("---")
+
+    # 产品详情（Product Details）
+    st.markdown("#### 产品详情（Product Details）")
+    details_products = [p for p in all_products if p.get("product_details")]
+    if details_products:
+        for p in details_products:
+            name = p.get("name", p["asin"])
+            details = p["product_details"]
+            with st.expander(f"📦 {name}", expanded=(p.get("asin") == active_asin)):
+                detail_rows = [{"属性": k, "值": v} for k, v in details.items()]
+                st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
 
 # ============================================================
 # Tab 2: 流量与转化
@@ -414,7 +449,7 @@ with tabs[1]:
             fig.update_yaxes(autorange="reversed")
             st.plotly_chart(fig, use_container_width=True)
 
-        st.dataframe(kw_df, width="stretch", hide_index=True)
+        st.dataframe(kw_df, use_container_width=True, hide_index=True)
     else:
         if do_keywords:
             st.info("关键词排名数据暂未获取到。")
@@ -427,12 +462,19 @@ with tabs[1]:
     st.markdown("### 📢 广告 & 促销活动")
     ad_rows = []
     for p in all_products:
-        ad_rows.append({
+        row = {
             "产品": p.get("name", p["asin"]),
             "优惠券": p.get("coupon", "无"),
-            "发货方式": p.get("fulfillment", "未知"),
-        })
-    st.dataframe(pd.DataFrame(ad_rows), width="stretch", hide_index=True)
+            "库存状态": p.get("stock_status", "未知"),
+        }
+        badges = []
+        if p.get("best_seller_badge"):
+            badges.append("🏆 Best Seller")
+        if p.get("amazon_choice_badge"):
+            badges.append("⭐ Amazon's Choice")
+        row["徽章"] = ", ".join(badges) if badges else "无"
+        ad_rows.append(row)
+    st.dataframe(pd.DataFrame(ad_rows), use_container_width=True, hide_index=True)
 
     st.divider()
 
@@ -450,7 +492,7 @@ with tabs[1]:
                 "评价数": p.get("review_count", 0),
             })
         review_df = pd.DataFrame(review_rows)
-        st.dataframe(review_df, width="stretch", hide_index=True)
+        st.dataframe(review_df, use_container_width=True, hide_index=True)
 
         valid_review = review_df[review_df["星级"].notna() & (review_df["评价数"] > 0)]
         if not valid_review.empty:
@@ -473,6 +515,8 @@ with tabs[1]:
                     st.markdown(f"**差评高频词** ({reviews.get('negative_count', 0)} 条差评)")
                     for kw in reviews.get("negative_keywords", []):
                         st.markdown(f"- ⚠️ {kw}")
+        else:
+            st.info("API 未返回评论详情数据，评价内容分析暂不可用。")
 
         # 竞品评价
         for c in competitors[:3]:
@@ -497,25 +541,37 @@ with tabs[2]:
 
     ops_rows = []
     for p in all_products:
-        ops_rows.append({
+        row = {
             "产品": p.get("name", p["asin"]),
             "品牌": p.get("brand", ""),
-            "发货方式": p.get("fulfillment", "未知"),
             "库存状态": p.get("stock_status", "未知"),
-            "卖家": p.get("seller", ""),
             "变体数": p.get("variant_count", 0),
-            "优惠券": p.get("coupon", "无"),
-        })
-    st.dataframe(pd.DataFrame(ops_rows), width="stretch", hide_index=True)
+            f"售价({currency})": p.get("price_daily"),
+        }
+        badges = []
+        if p.get("best_seller_badge"):
+            badges.append("🏆BS")
+        if p.get("amazon_choice_badge"):
+            badges.append("⭐AC")
+        row["徽章"] = " ".join(badges) if badges else ""
+        ops_rows.append(row)
+    st.dataframe(pd.DataFrame(ops_rows), use_container_width=True, hide_index=True)
 
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### 发货方式分布")
-        ops_df = pd.DataFrame(ops_rows)
-        fulfill_counts = ops_df["发货方式"].value_counts().reset_index()
-        fulfill_counts.columns = ["发货方式", "数量"]
-        fig = px.pie(fulfill_counts, names="发货方式", values="数量", title="发货方式占比")
-        st.plotly_chart(fig, use_container_width=True)
+        st.markdown("#### BSR 排名对比")
+        bsr_rows = [
+            {"产品": p.get("name", p["asin"]),
+             "BSR": p.get("bsr") or 0,
+             "类目": p.get("category_node", "")}
+            for p in all_products
+            if p.get("bsr")
+        ]
+        if bsr_rows:
+            bsr_df = pd.DataFrame(bsr_rows)
+            fig = px.bar(bsr_df, x="产品", y="BSR", color="类目",
+                         title="BSR 排名对比（越低越好）")
+            st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.markdown("#### 价格 vs 星级 vs 评价数")
@@ -532,6 +588,17 @@ with tabs[2]:
                              x="售价", y="星级", size="评价数", color="产品",
                              title="价格-星级-评价数关系图", size_max=50)
             st.plotly_chart(fig, use_container_width=True)
+
+    # BSR 分类详情
+    st.markdown("#### BSR 分类详情")
+    for p in all_products:
+        bsr_details = p.get("bsr_details", [])
+        if bsr_details:
+            name = p.get("name", p["asin"])
+            with st.expander(f"📊 {name}"):
+                bsr_detail_rows = [{"排名": f"#{d['rank']:,}", "类目": d["category"]}
+                                   for d in bsr_details]
+                st.dataframe(pd.DataFrame(bsr_detail_rows), use_container_width=True, hide_index=True)
 
 # ============================================================
 # Tab 4: 合规与风险
@@ -608,15 +675,16 @@ with tabs[4]:
             "产品": p.get("name", p["asin"]),
             "层级": p.get("tier", "本品"),
             "品牌": p.get("brand", ""),
-            "价格($)": price,
+            f"价格({currency})": price,
             "星级": rating,
             "评价数": review_count,
             "BSR": f"#{bsr:,}" if bsr < 999 else "N/A",
+            "徽章": ("🏆" if p.get("best_seller_badge") else "") + ("⭐" if p.get("amazon_choice_badge") else ""),
             "综合得分": score,
         })
 
     summary_df = pd.DataFrame(summary_rows).sort_values("综合得分", ascending=False)
-    st.dataframe(summary_df, width="stretch", hide_index=True)
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     # 差异化机会
     st.markdown("#### 🎯 差异化机会发现")

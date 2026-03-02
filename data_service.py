@@ -1,6 +1,6 @@
 """
-数据服务层 - 基于真实 Amazon 爬虫获取产品和竞品数据
-调用 scraper.py → subprocess → scrape_worker.py (Playwright)
+数据服务层 - 通过内部 API 获取 Amazon 产品和竞品数据
+调用 scraper.py → HTTP API (http://10.0.2.74:5001)
 """
 
 import re
@@ -36,6 +36,14 @@ def search_product(asin: str, domain: str = "us") -> dict | None:
     product.setdefault("coupon", "无")
     product.setdefault("related_asins", [])
     product.setdefault("reviews", [])
+    product.setdefault("similar_products", [])
+    product.setdefault("bsr_details", [])
+    product.setdefault("product_details", {})
+    product.setdefault("best_seller_badge", False)
+    product.setdefault("amazon_choice_badge", False)
+    product.setdefault("currency", "")
+    product.setdefault("images", [])
+    product.setdefault("url", "")
 
     # 主打卖点（取第一条 bullet）
     if product["bullet_points"]:
@@ -48,48 +56,30 @@ def search_product(asin: str, domain: str = "us") -> dict | None:
 
 
 def find_competitors(asin: str, domain: str = "us", count: int = 5,
-                     progress_callback=None) -> list[dict]:
+                     progress_callback=None, target_product: dict | None = None) -> list[dict]:
     """
-    查找竞品：
-    1. 优先从产品页 related_asins 获取
-    2. 不足时用标题关键词搜索补充
+    查找竞品：直接取目标产品 similar_products 前 count 个
+    target_product: 已获取的目标产品数据，避免重复调 API
     """
-    target = search_product(asin, domain)
+    target = target_product or search_product(asin, domain)
     if not target:
         return []
 
+    # 直接取 similar_products 前 count 个 ASIN
+    similar = target.get("similar_products", [])
     candidate_asins = []
+    for p in similar:
+        a = p.get("asin", "")
+        if a and a != asin.upper() and a not in candidate_asins:
+            candidate_asins.append(a)
+        if len(candidate_asins) >= count:
+            break
 
-    # 来源1: 产品页相关产品
-    related = [a for a in target.get("related_asins", []) if a != asin.upper()]
-    candidate_asins.extend(related)
-
-    # 来源2: 标题关键词搜索补充
-    if len(candidate_asins) < count and target.get("title"):
-        words = target["title"].split()[:5]
-        search_kw = " ".join(words)
-        if progress_callback:
-            progress_callback(f"搜索关键词: {search_kw}")
-
-        search_results = fetch_search(search_kw, domain)
-        for sr in search_results:
-            if sr["asin"] != asin.upper() and sr["asin"] not in candidate_asins:
-                candidate_asins.append(sr["asin"])
-
-    # 去重截取
-    seen = set()
-    unique = []
-    for a in candidate_asins:
-        if a not in seen:
-            seen.add(a)
-            unique.append(a)
-    candidate_asins = unique[:count]
-
-    # 逐个抓取竞品详情
+    # 逐个调 API 获取竞品完整详情
     competitors = []
     for i, comp_asin in enumerate(candidate_asins):
         if progress_callback:
-            progress_callback(f"正在抓取竞品 {i+1}/{len(candidate_asins)}: {comp_asin}")
+            progress_callback(f"正在获取竞品 {i+1}/{len(candidate_asins)}: {comp_asin}")
 
         comp = search_product(comp_asin, domain)
         if comp:
@@ -106,9 +96,6 @@ def find_competitors(asin: str, domain: str = "us", count: int = 5,
 
             comp["name"] = f"{comp.get('brand', '')} ({comp['asin']})"
             competitors.append(comp)
-
-        if len(competitors) >= count:
-            break
 
     return competitors
 
