@@ -1,7 +1,7 @@
 """
 Amazon 数据获取模块（API 版）
 通过内部 API 获取产品数据，替代 Playwright 爬虫
-API: http://genie-data.hbo-vps.com/main/api/v1/asin/{ASIN}?marketplace={MARKETPLACE}&force_refresh=true
+API: https://genie-data.hbo-erp.com/main/api/v1/asin/{ASIN}?marketplace={MARKETPLACE}&force_refresh=true
 """
 
 import json
@@ -16,7 +16,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # API 配置（优先从环境变量读取，支持 Streamlit Cloud Secrets）
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://genie-data.hbo-vps.com/main/api/v1/asin")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://genie-data.hbo-erp.com/main/api/v1/asin")
 API_TIMEOUT = 60  # 秒
 
 # 域名代码 → API marketplace 映射

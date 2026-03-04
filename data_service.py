@@ -1,6 +1,6 @@
 """
 数据服务层 - 通过内部 API 获取 Amazon 产品和竞品数据
-调用 scraper.py → HTTP API (http://genie-data.hbo-vps.com/main/)
+调用 scraper.py → HTTP API (https://genie-data.hbo-erp.com/main/)
 """
 
 import re
